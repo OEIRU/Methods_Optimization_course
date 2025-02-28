@@ -38,39 +38,37 @@ function printRes(name, iter, x1, x2, eps, data) {
 }
 
 // Функция для построения графика с тремя линиями
-function plotErrors(iterations, dichotomyErrors, goldErrors, fiboErrors, eps) {
-    const plot = gnuplot();
-    plot.set("title", `Сравнение методов, eps: ${eps}`);
-    plot.set("xlabel", "Итерация");
-    plot.set("ylabel", "Абсолютная ошибка");
+async function plotErrors(iterations, dichotomyErrors, goldErrors, fiboErrors, eps) {
+    plot = gnuplot();
+    plot.set("title", `"Сравнение методов, eps: ${eps}"`);
+    plot.set("xlabel", '"Итерация"');
+    plot.set("ylabel", '"Абсолютная ошибка"');
     plot.set("grid");
+    plot.set("logscale y 10")
 
     // Подготовка данных для графика
     const data = iterations
-        .map((iter, index) => `${iter}\t${dichotomyErrors[index]}\t${goldErrors[index]}\t${fiboErrors[index]}`)
-        .join("\n");
+        .map((iter, index) => `${iter} ${dichotomyErrors[index]} ${goldErrors[index]} ${fiboErrors[index]}`)
 
-    console.log("Данные для графика:");
-    console.log(data);
+    plot.set("terminal png"); // Сохраняем график в файл
+    plot.set(`output "comparison_eps_${eps}.png"`, err => console.error(err));
+    console.log(data)
 
-    plot.set("terminal", "png"); // Сохраняем график в файл
-    plot.set("output", `comparison_eps_${eps}.png`);
+    plot.plot(
+        `'-' using 1:2 title "Дихотомия" with lines lw 2 lc rgb '#FF0000', \
+        '-' using 1:3 title "Золотое сечение" with lines lw 2 lc rgb '#00FF00', \
+        '-' using 1:4 title "Фибоначчи" with lines lw 2 lc rgb '#0000FF'`
+    );
 
-    plot.plot(`
-        '-' using 1:2 title "Дихотомия" with lines, \
-        '-' using 1:3 title "Золотое сечение" with lines, \
-        '-' using 1:4 title "Фибоначчи" with lines
-    `);
-
-    plot.write(data, (err) => {
-        if (err) {
-            console.error("Ошибка при построении графика:", err);
-        } else {
-            console.log(`График сохранён в файл comparison_eps_${eps}.png`);
+    for (let i = 0; i < 3; i++) {
+        for (let x of data) {
+            plot.println(x)
         }
-    });
+        plot.println("e")
+    }
 
-    plot.end();
+    plot.end()
+
 }
 
 // Метод дихотомии
@@ -203,8 +201,9 @@ function fibo(eps) {
 }
 
 // Основная функция
-function main() {
+async function main() {
     const epsilons = [0.1, 1.0E-2, 1.0E-3, 1.0E-4, 1.0E-5, 1.0E-6, 1.0E-7];
+    // const epsilons = [0.1];
 
     for (const eps of epsilons) {
         const dichotomyData = dichotomy(eps);
@@ -212,7 +211,7 @@ function main() {
         const fiboData = fibo(eps);
 
         // Построение графика для текущего eps
-        plotErrors(
+        await plotErrors(
             dichotomyData.iterations,
             dichotomyData.errors,
             goldData.errors,
