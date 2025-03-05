@@ -37,38 +37,36 @@ function printRes(name, iter, x1, x2, eps, data) {
     });
 }
 
-// Функция для построения графика с тремя линиями
-async function plotErrors(iterations, dichotomyErrors, goldErrors, fiboErrors, eps) {
-    plot = gnuplot();
-    plot.set("title", `"Сравнение методов, eps: ${eps}"`);
-    plot.set("xlabel", '"Итерация"');
-    plot.set("ylabel", '"Абсолютная ошибка"');
+// Функция для построения графика зависимости количества итераций от log(eps)
+async function plotFunctionCalls(logEpsValues, dichotomyIterations, goldIterations, fiboIterations) {
+    const plot = gnuplot();
+    plot.set("title", `"Зависимость количества итераций от log10(eps)"`);
+    plot.set("xlabel", '"log10(eps)"');
+    plot.set("ylabel", '"Количество итераций"');
     plot.set("grid");
-    plot.set("logscale y 10")
 
     // Подготовка данных для графика
-    const data = iterations
-        .map((iter, index) => `${iter} ${dichotomyErrors[index]} ${goldErrors[index]} ${fiboErrors[index]}`)
+    const data = logEpsValues.map((logEps, index) => 
+        `${logEps} ${dichotomyIterations[index]} ${goldIterations[index]} ${fiboIterations[index]}`
+    );
 
     plot.set("terminal png"); // Сохраняем график в файл
-    plot.set(`output "comparison_eps_${eps}.png"`, err => console.error(err));
-    console.log(data)
+    plot.set(`output "iterations_vs_log_eps.png"`, err => console.error(err));
 
     plot.plot(
-        `'-' using 1:2 title "Дихотомия" with lines lw 2 lc rgb '#FF0000', \
-        '-' using 1:3 title "Золотое сечение" with lines lw 2 lc rgb '#00FF00', \
-        '-' using 1:4 title "Фибоначчи" with lines lw 2 lc rgb '#0000FF'`
+        `'-' using 1:2 title "Дихотомия" with linespoints lw 2 lc rgb '#FF0000' pt 7 ps 1.5, \
+        '-' using 1:3 title "Золотое сечение" with linespoints lw 2 lc rgb '#00FF00' pt 7 ps 1.5, \
+        '-' using 1:4 title "Фибоначчи" with linespoints lw 2 lc rgb '#0000FF' pt 7 ps 1.5`
     );
 
     for (let i = 0; i < 3; i++) {
         for (let x of data) {
-            plot.println(x)
+            plot.println(x);
         }
-        plot.println("e")
+        plot.println("e");
     }
 
-    plot.end()
-
+    plot.end();
 }
 
 // Метод дихотомии
@@ -76,10 +74,8 @@ function dichotomy(eps) {
     const delta = eps / 2;
     let ai = a0, bi = b0;
     const maxIterCount = ceil(log((b0 - a0) / eps) / log(2.0));
-    let iterCount = 0;
+    let iterCount = 0; // Счётчик итераций
     const data = []; // Данные для Excel
-    const errors = []; // Абсолютные ошибки для графика
-    const iterations = []; // Номера итераций
 
     while (iterCount < maxIterCount) {
         iterCount++;
@@ -96,12 +92,10 @@ function dichotomy(eps) {
         }
 
         printRes("Дихотомия", iterCount, ai, bi, eps, data);
-        errors.push(data[data.length - 1]["Абс. ошибка"]);
-        iterations.push(iterCount);
     }
 
     writeToExcel("Дихотомия", eps, data);
-    return { iterations, errors };
+    return { iterations: iterCount }; // Возвращаем количество итераций
 }
 
 // Метод золотого сечения
@@ -112,10 +106,8 @@ function gold(eps) {
 
     let ai = a0, bi = b0;
     const maxIterCount = ceil(log((b0 - a0) / eps) / log(phi));
-    let iterCount = 0;
+    let iterCount = 0; // Счётчик итераций
     const data = []; // Данные для Excel
-    const errors = []; // Абсолютные ошибки для графика
-    const iterations = []; // Номера итераций
 
     while (iterCount < maxIterCount) {
         iterCount++;
@@ -132,38 +124,25 @@ function gold(eps) {
         }
 
         printRes("Золотое сечение", iterCount, ai, bi, eps, data);
-        errors.push(data[data.length - 1]["Абс. ошибка"]);
-        iterations.push(iterCount);
     }
 
     writeToExcel("Золотое сечение", eps, data);
-    return { iterations, errors };
+    return { iterations: iterCount }; // Возвращаем количество итераций
 }
 
 // Метод Фибоначчи
 function fibo(eps) {
-    function fibonacci(n) {
-        let a = 0, b = 1;
-        for (let i = 0; i < n; i++) {
-            [a, b] = [b, a + b];
-        }
-        return a;
+    function Fn(n) {
+        return (((1 + sqrt(5.0)) / 2.0) ** n - ((1.0 - sqrt(5.0)) / 2.0) ** n) / sqrt(5.0);
     }
 
     let ai = a0, bi = b0;
-    const maxIterCount = ceil(log((b0 - a0) / eps) / log((1 + sqrt(5)) / 2));
-    let iterCount = 0;
+    const maxIterCount = ceil(log((b0 - a0) / eps) / log((1.0 + sqrt(5.0)) / 2.0));
+    let iterCount = 0; // Счётчик итераций
     const data = []; // Данные для Excel
-    const errors = []; // Абсолютные ошибки для графика
-    const iterations = []; // Номера итераций
 
-    const F = Array(maxIterCount + 2).fill(0);
-    for (let i = 0; i <= maxIterCount + 1; i++) {
-        F[i] = fibonacci(i);
-    }
-
-    let x1 = ai + (F[maxIterCount - iterCount - 1] / F[maxIterCount - iterCount + 1]) * (bi - ai);
-    let x2 = ai + (F[maxIterCount - iterCount] / F[maxIterCount - iterCount + 1]) * (bi - ai);
+    let x1 = ai + (Fn(maxIterCount) / Fn(maxIterCount + 2)) * (bi - ai);
+    let x2 = ai + (Fn(maxIterCount + 1) / Fn(maxIterCount + 2)) * (bi - ai);
     let y1 = targetFunction(x1), y2 = targetFunction(x2);
 
     while (iterCount < maxIterCount - 1) {
@@ -173,52 +152,46 @@ function fibo(eps) {
             bi = x2;
             x2 = x1;
             y2 = y1;
-            x1 = ai + (F[maxIterCount - iterCount - 1] / F[maxIterCount - iterCount + 1]) * (bi - ai);
+            x1 = ai + (Fn(maxIterCount - iterCount + 1) / Fn(maxIterCount - iterCount + 3)) * (bi - ai);
             y1 = targetFunction(x1);
         } else {
             ai = x1;
             x1 = x2;
             y1 = y2;
-            x2 = ai + (F[maxIterCount - iterCount] / F[maxIterCount - iterCount + 1]) * (bi - ai);
+            x2 = ai + (Fn(maxIterCount - iterCount + 2) / Fn(maxIterCount - iterCount + 3)) * (bi - ai);
             y2 = targetFunction(x2);
         }
 
         printRes("Фибоначчи", iterCount, ai, bi, eps, data);
-        errors.push(data[data.length - 1]["Абс. ошибка"]);
-        iterations.push(iterCount);
     }
 
-    iterCount++;
-    if (y1 < y2) {
-        bi = x2;
-    } else {
-        ai = x1;
-    }
-
-    printRes("Фибоначчи", iterCount, ai, bi, eps, data);
     writeToExcel("Фибоначчи", eps, data);
-    return { iterations, errors };
+    return { iterations: iterCount }; // Возвращаем количество итераций
 }
 
 // Основная функция
 async function main() {
     const epsilons = [0.1, 1.0E-2, 1.0E-3, 1.0E-4, 1.0E-5, 1.0E-6, 1.0E-7];
-    // const epsilons = [0.1];
+    const logEpsValues = epsilons.map(eps => Math.log10(eps)); // Логарифмическая шкала для eps
+
+    // Объявление массивов для сбора данных
+    const dichotomyIterations = [];
+    const goldIterations = [];
+    const fiboIterations = [];
 
     for (const eps of epsilons) {
         const dichotomyData = dichotomy(eps);
         const goldData = gold(eps);
         const fiboData = fibo(eps);
 
-        // Построение графика для текущего eps
-        await plotErrors(
-            dichotomyData.iterations,
-            dichotomyData.errors,
-            goldData.errors,
-            fiboData.errors,
-            eps
-        );
+        // Сбор данных о количестве итераций
+        dichotomyIterations.push(dichotomyData.iterations);
+        goldIterations.push(goldData.iterations);
+        fiboIterations.push(fiboData.iterations);
     }
+
+    // Построение графика зависимости количества итераций от log(eps)
+    await plotFunctionCalls(logEpsValues, dichotomyIterations, goldIterations, fiboIterations);
 }
 
 main();
