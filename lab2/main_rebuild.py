@@ -47,6 +47,7 @@ def make_function_with_counter(f, tracker):
 
 def _f_quadratic(x):
     return 100 * (x[1] - x[0])**2 + (1 - x[0])**2
+    # return x[0]**3 + x[1]**3 + 3
 
 def _f_rosenbrock(x):
     return 100 * (x[1] - x[0]**2)**2 + (1 - x[0])**2
@@ -137,12 +138,9 @@ def hessian(f, x, tracker, h=1e-6):
             
     return hess
 
-def line_search(f, x, p, nabla, tracker, find_max=False, max_iter=100):
+def line_search(f, x, p, nabla, tracker, find_max=False, c1=1e-4, c2=0.9, max_iter=100):
     alpha = 1.0
-    c1 = 1e-4
-    c2 = 0.9 if not find_max else 0.1
     fx = f(x)
-    
     for _ in range(max_iter):
         x_new = x + alpha * p
         fx_new = f(x_new)
@@ -154,12 +152,36 @@ def line_search(f, x, p, nabla, tracker, find_max=False, max_iter=100):
         else:
             armijo = fx_new <= fx + c1 * alpha * np.dot(nabla, p)
             curvature = np.dot(grad_new, p) >= c2 * np.dot(nabla, p)
-            
+        
         if armijo and curvature:
             return alpha
-        alpha *= 0.5
+        alpha *= 0.5  # Уменьшаем шаг в 2 раза
         
     return alpha
+    
+#def line_search(f, x, p, nabla, tracker, find_max=False, max_iter=100):
+##   alpha = 1.0
+#    c1 = 1e-4
+#    c2 = 0.9 if not find_max else 0.1
+#    fx = f(x)
+#    
+#    for _ in range(max_iter):
+#        x_new = x + alpha * p
+#        fx_new = f(x_new)
+#        grad_new = grad(f, x_new, tracker)
+#        
+#        if find_max:
+#            armijo = fx_new >= fx + c1 * alpha * np.dot(nabla, p)
+#            curvature = np.dot(grad_new, p) <= c2 * np.dot(nabla, p)
+#        else:
+#            armijo = fx_new <= fx + c1 * alpha * np.dot(nabla, p)
+#            curvature = np.dot(grad_new, p) >= c2 * np.dot(nabla, p)
+#            
+#        if armijo and curvature:
+#            return alpha
+#        alpha *= 0.5
+#        
+#    return alpha
 
 def newton_method(f, x0, eps, tracker, plot=True, table=True, find_max=False, max_iter=5000):
     tracker.reset()
@@ -181,7 +203,7 @@ def newton_method(f, x0, eps, tracker, plot=True, table=True, find_max=False, ma
             if find_max:
                 p = -p
                 
-            direction_ok = np.dot(p, grad_current) < -1e-8 if not find_max else np.dot(p, grad_current) > 1e-8
+            direction_ok = np.dot(p, grad_current) < -1e-15 if not find_max else np.dot(p, grad_current) > 1e-8
             if not direction_ok:
                 p = grad_current if find_max else -grad_current
         except np.linalg.LinAlgError:
@@ -211,7 +233,7 @@ def newton_method(f, x0, eps, tracker, plot=True, table=True, find_max=False, ma
         return make_table(trajectory, f_values, gradients, alphas, steps, hessians)
     return trajectory[-1]
 
-def dfp_method(f, x0, eps, tracker, plot=True, table=True, max_iter=500):
+def dfp_method(f, x0, eps, tracker, plot=True, table=True, find_max=False,  max_iter=500):
     tracker.reset()
     x = np.array(x0, dtype=float)
     n = len(x)
@@ -223,20 +245,29 @@ def dfp_method(f, x0, eps, tracker, plot=True, table=True, max_iter=500):
     alphas = []
     steps = []
     hessians = [H.copy()]
-    
     for _ in range(max_iter):
-        p = -H @ grad_current
+        # Направление зависит от поиска максимума
+        if find_max:
+            p = H @ grad_current
+            if np.dot(p, grad_current) <= 0:
+                p = grad_current
+                H = np.eye(n)
+        else:
+            p = -H @ grad_current
+            if np.dot(p, grad_current) >= 0:
+                p = -grad_current
+                H = np.eye(n)
         
-        if np.dot(p, grad_current) >= 0:
-            p = -grad_current
+        # Проверка корректности направления (MORE!!)
+        if (find_max and np.dot(p, grad_current) <= 0) or (not find_max and np.dot(p, grad_current) >= 0):
+            p = grad_current if find_max else -grad_current
             H = np.eye(n)
         
-        alpha = line_search(f, x, p, grad_current, tracker)
+        alpha = line_search(f, x, p, grad_current, tracker, find_max=find_max)
         s = alpha * p
         x_new = x + s
         grad_new = grad(f, x_new, tracker)
         y = grad_new - grad_current
-        
         s_norm = np.linalg.norm(s)
         y_norm = np.linalg.norm(y)
         
@@ -244,7 +275,6 @@ def dfp_method(f, x0, eps, tracker, plot=True, table=True, max_iter=500):
             s = s.reshape(-1, 1)
             y = y.reshape(-1, 1)
             rho = 1.0 / (y.T @ s + 1e-10)
-            
             if np.abs(rho) < 1e10:
                 Hy = H @ y
                 H = H - (Hy @ Hy.T) / (y.T @ Hy + 1e-10) + rho * (s @ s.T)
@@ -262,7 +292,7 @@ def dfp_method(f, x0, eps, tracker, plot=True, table=True, max_iter=500):
         
         if grad_norm < eps or step_norm < 1e-8 or f_change < 1e-12:
             break
-            
+        
         x = x_new
         grad_current = grad_new
     
@@ -394,7 +424,7 @@ class OptimizationApp:
                 if method == 'newton':
                     result = newton_method(f, x0, eps, self.tracker, plot=False, table=True, find_max=find_max)
                 else:
-                    result = dfp_method(f, x0, eps, self.tracker, plot=False, table=True)
+                    result = dfp_method(f, x0, eps, self.tracker, plot=False, table=True, find_max=find_max)
                 
                 # Update plot
                 self.figure.clear()
