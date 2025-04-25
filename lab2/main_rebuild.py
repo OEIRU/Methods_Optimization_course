@@ -11,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor
 class OptimizationTracker:
     def __init__(self):
         self.reset()
-        
     def reset(self):
         self.f_count = 0
         self.grad_count = 0
@@ -22,14 +21,12 @@ class ParallelGradient:
         self.f = f
         self.tracker = tracker
         self.h = h
-    
     def _calc_partial(self, x, i):
         x_plus = x.copy()
         x_plus[i] += self.h
         x_minus = x.copy()
         x_minus[i] -= self.h
-        return (self.f(x_plus) - self.f(x_minus)) / (2 * self.h)  # Исправлено здесь
-
+        return (self.f(x_plus) - self.f(x_minus)) / (2 * self.h)
     def compute(self, x):
         with ThreadPoolExecutor() as executor:
             results = list(executor.map(
@@ -47,7 +44,6 @@ def make_function_with_counter(f, tracker):
 
 def _f_quadratic(x):
     return 100 * (x[1] - x[0])**2 + (1 - x[0])**2
-    # return x[0]**3 + x[1]**3 + 3
 
 def _f_rosenbrock(x):
     return 100 * (x[1] - x[0]**2)**2 + (1 - x[0])**2
@@ -57,6 +53,35 @@ def _f_multi_exponential(x, params):
     term1 = A1 * np.exp(-((x[0]-a1)/b1)**2 - ((x[1]-c1)/d1)**2)
     term2 = A2 * np.exp(-((x[0]-a2)/b2)**2 - ((x[1]-c2)/d2)**2)
     return term1 + term2
+
+def grad(f, x, tracker, h=1e-6):
+    pg = ParallelGradient(f, tracker, h)
+    return pg.compute(x)
+
+def hessian(f, x, tracker, h=1e-6):
+    n = len(x)
+    hess = np.zeros((n, n))
+    with ThreadPoolExecutor() as executor:
+        futures = []
+        for i in range(n):
+            for j in range(n):
+                x_pp = x.copy()
+                x_pm = x.copy()
+                x_mp = x.copy()
+                x_mm = x.copy()
+                x_pp[i] += h; x_pp[j] += h
+                x_pm[i] += h; x_pm[j] -= h
+                x_mp[i] -= h; x_mp[j] += h
+                x_mm[i] -= h; x_mm[j] -= h
+                futures.append(executor.submit(
+                    lambda: (f(x_pp) - f(x_pm) - f(x_mp) + f(x_mm)) / (4 * h**2)
+                ))  
+        for idx, future in enumerate(futures):
+            i = idx // n
+            j = idx % n
+            hess[i, j] = future.result()
+            tracker.hessian_count += 4
+    return hess
 
 def make_plot(x_store, f, algorithm, params=None):
     x_store = np.array(x_store)
@@ -82,7 +107,7 @@ def make_plot(x_store, f, algorithm, params=None):
     plt.xlabel('x1')
     plt.ylabel('x2')
     plt.show()
-
+    
 def make_table(x_store, f_store, nabla_store, a_store, s_store, H_store=None):
     data = []
     for i in range(len(x_store)):
@@ -104,40 +129,7 @@ def make_table(x_store, f_store, nabla_store, a_store, s_store, H_store=None):
         data.append(row)
     return pd.DataFrame(data).set_index('Iteration')
 
-def grad(f, x, tracker, h=1e-6):
-    pg = ParallelGradient(f, tracker, h)
-    return pg.compute(x)
-
-def hessian(f, x, tracker, h=1e-6):
-    n = len(x)
-    hess = np.zeros((n, n))
     
-    with ThreadPoolExecutor() as executor:
-        futures = []
-        for i in range(n):
-            for j in range(n):
-                x_pp = x.copy()
-                x_pm = x.copy()
-                x_mp = x.copy()
-                x_mm = x.copy()
-                
-                x_pp[i] += h; x_pp[j] += h
-                x_pm[i] += h; x_pm[j] -= h
-                x_mp[i] -= h; x_mp[j] += h
-                x_mm[i] -= h; x_mm[j] -= h
-                
-                futures.append(executor.submit(
-                    lambda: (f(x_pp) - f(x_pm) - f(x_mp) + f(x_mm)) / (4 * h**2)
-                ))  
-
-        for idx, future in enumerate(futures):
-            i = idx // n
-            j = idx % n
-            hess[i, j] = future.result()
-            tracker.hessian_count += 4
-            
-    return hess
-
 def line_search(f, x, p, nabla, tracker, find_max=False, c1=1e-4, c2=0.9, max_iter=100):
     alpha = 1.0
     fx = f(x)
@@ -145,43 +137,16 @@ def line_search(f, x, p, nabla, tracker, find_max=False, c1=1e-4, c2=0.9, max_it
         x_new = x + alpha * p
         fx_new = f(x_new)
         grad_new = grad(f, x_new, tracker)
-        
         if find_max:
             armijo = fx_new >= fx + c1 * alpha * np.dot(nabla, p)
             curvature = np.dot(grad_new, p) <= c2 * np.dot(nabla, p)
         else:
             armijo = fx_new <= fx + c1 * alpha * np.dot(nabla, p)
             curvature = np.dot(grad_new, p) >= c2 * np.dot(nabla, p)
-        
         if armijo and curvature:
             return alpha
-        alpha *= 0.5  # Уменьшаем шаг в 2 раза
-        
+        alpha *= 0.5
     return alpha
-    
-#def line_search(f, x, p, nabla, tracker, find_max=False, max_iter=100):
-##   alpha = 1.0
-#    c1 = 1e-4
-#    c2 = 0.9 if not find_max else 0.1
-#    fx = f(x)
-#    
-#    for _ in range(max_iter):
-#        x_new = x + alpha * p
-#        fx_new = f(x_new)
-#        grad_new = grad(f, x_new, tracker)
-#        
-#        if find_max:
-#            armijo = fx_new >= fx + c1 * alpha * np.dot(nabla, p)
-#            curvature = np.dot(grad_new, p) <= c2 * np.dot(nabla, p)
-#        else:
-#            armijo = fx_new <= fx + c1 * alpha * np.dot(nabla, p)
-#            curvature = np.dot(grad_new, p) >= c2 * np.dot(nabla, p)
-#            
-#        if armijo and curvature:
-#            return alpha
-#        alpha *= 0.5
-#        
-#    return alpha
 
 def newton_method(f, x0, eps, tracker, plot=True, table=True, find_max=False, max_iter=5000):
     tracker.reset()
@@ -192,40 +157,61 @@ def newton_method(f, x0, eps, tracker, plot=True, table=True, find_max=False, ma
     alphas = []
     steps = []
     hessians = []
-    
     for _ in range(max_iter):
         grad_current = gradients[-1]
         hess = hessian(f, x, tracker)
         hessians.append(hess)
-        
         try:
             p = np.linalg.solve(hess, -grad_current)
             if find_max:
                 p = -p
-                
             direction_ok = np.dot(p, grad_current) < -1e-15 if not find_max else np.dot(p, grad_current) > 1e-8
             if not direction_ok:
                 p = grad_current if find_max else -grad_current
         except np.linalg.LinAlgError:
             p = grad_current if find_max else -grad_current
-            
         alpha = line_search(f, x, p, grad_current, tracker, find_max)
         s = alpha * p
         x_new = x + s
-        
         trajectory.append(x_new.copy())
         f_values.append(f(x_new))
         gradients.append(grad(f, x_new, tracker))
         alphas.append(alpha)
         steps.append(s)
-        
         grad_norm = np.linalg.norm(gradients[-1])
         step_norm = np.linalg.norm(s)
         if grad_norm < eps or step_norm < 1e-8:
             break
-            
         x = x_new
-    
+
+    # Формирование нового вывода
+    output_lines = [
+        "Newton Method",
+        f"Number of iterations objective function: {tracker.f_count}",
+        f"Number of iterations: {len(trajectory)}",
+        f"Calculation accuracy: {eps:.3f}",
+        " i (x, y) f(x, y) S lambda angle delta(X) delta(Y) delta(f) Gradient"
+    ]
+    for i in range(len(trajectory)):
+        x_prev = trajectory[i-1] if i > 0 else trajectory[i]
+        x_curr = trajectory[i]
+        f_prev = f_values[i-1] if i > 0 else f_values[i]
+        f_curr = f_values[i]
+        grad_curr = gradients[i]
+        alpha = alphas[i-1] if i > 0 else 0
+        s = steps[i-1] if i > 0 else np.zeros_like(x_curr)
+        delta_x = x_curr[0] - x_prev[0]
+        delta_y = x_curr[1] - x_prev[1]
+        delta_f = f_curr - f_prev
+        angle = np.arctan2(delta_y, delta_x) if (delta_x != 0 or delta_y != 0) else 0
+        output_lines.append(
+            f"{i} ({x_curr[0]:.6f}, {x_curr[1]:.6f}) {f_curr:.6f} {s} {alpha:.6f} "
+            f"{angle:.6f} {delta_x:.6f} {delta_y:.6f} {delta_f:.6f} {grad_curr}"
+        )
+
+    output_text = "\n".join(output_lines)
+    print(output_text)
+
     if plot:
         title = 'Newton Method (Maximization)' if find_max else 'Newton Method'
         make_plot(np.array(trajectory), f, title)
@@ -233,7 +219,7 @@ def newton_method(f, x0, eps, tracker, plot=True, table=True, find_max=False, ma
         return make_table(trajectory, f_values, gradients, alphas, steps, hessians)
     return trajectory[-1]
 
-def dfp_method(f, x0, eps, tracker, plot=True, table=True, find_max=False,  max_iter=500):
+def dfp_method(f, x0, eps, tracker, plot=True, table=True, find_max=False, max_iter=500):
     tracker.reset()
     x = np.array(x0, dtype=float)
     n = len(x)
@@ -246,7 +232,6 @@ def dfp_method(f, x0, eps, tracker, plot=True, table=True, find_max=False,  max_
     steps = []
     hessians = [H.copy()]
     for _ in range(max_iter):
-        # Направление зависит от поиска максимума
         if find_max:
             p = H @ grad_current
             if np.dot(p, grad_current) <= 0:
@@ -257,12 +242,9 @@ def dfp_method(f, x0, eps, tracker, plot=True, table=True, find_max=False,  max_
             if np.dot(p, grad_current) >= 0:
                 p = -grad_current
                 H = np.eye(n)
-        
-        # Проверка корректности направления (MORE!!)
         if (find_max and np.dot(p, grad_current) <= 0) or (not find_max and np.dot(p, grad_current) >= 0):
             p = grad_current if find_max else -grad_current
             H = np.eye(n)
-        
         alpha = line_search(f, x, p, grad_current, tracker, find_max=find_max)
         s = alpha * p
         x_new = x + s
@@ -270,7 +252,6 @@ def dfp_method(f, x0, eps, tracker, plot=True, table=True, find_max=False,  max_
         y = grad_new - grad_current
         s_norm = np.linalg.norm(s)
         y_norm = np.linalg.norm(y)
-        
         if s_norm > 1e-8 and y_norm > 1e-8:
             s = s.reshape(-1, 1)
             y = y.reshape(-1, 1)
@@ -278,24 +259,48 @@ def dfp_method(f, x0, eps, tracker, plot=True, table=True, find_max=False,  max_
             if np.abs(rho) < 1e10:
                 Hy = H @ y
                 H = H - (Hy @ Hy.T) / (y.T @ Hy + 1e-10) + rho * (s @ s.T)
-        
         trajectory.append(x_new.copy())
         f_values.append(f(x_new))
         gradients.append(grad_new.copy())
         alphas.append(alpha)
         steps.append(s.flatten())
         hessians.append(H.copy())
-        
         grad_norm = np.linalg.norm(grad_new)
         step_norm = np.linalg.norm(s)
         f_change = abs(f_values[-2] - f_values[-1])
-        
         if grad_norm < eps or step_norm < 1e-8 or f_change < 1e-12:
             break
-        
         x = x_new
         grad_current = grad_new
-    
+
+    # Формирование нового вывода
+    output_lines = [
+        "DFP Method",
+        f"Number of iterations objective function: {tracker.f_count}",
+        f"Number of iterations: {len(trajectory)}",
+        f"Calculation accuracy: {eps:.3f}",
+        " i (x, y) f(x, y) S lambda angle delta(X) delta(Y) delta(f) Gradient"
+    ]
+    for i in range(len(trajectory)):
+        x_prev = trajectory[i-1] if i > 0 else trajectory[i]
+        x_curr = trajectory[i]
+        f_prev = f_values[i-1] if i > 0 else f_values[i]
+        f_curr = f_values[i]
+        grad_curr = gradients[i]
+        alpha = alphas[i-1] if i > 0 else 0
+        s = steps[i-1] if i > 0 else np.zeros_like(x_curr)
+        delta_x = x_curr[0] - x_prev[0]
+        delta_y = x_curr[1] - x_prev[1]
+        delta_f = f_curr - f_prev
+        angle = np.arctan2(delta_y, delta_x) if (delta_x != 0 or delta_y != 0) else 0
+        output_lines.append(
+            f"{i} ({x_curr[0]:.6f}, {x_curr[1]:.6f}) {f_curr:.6f} {s} {alpha:.6f} "
+            f"{angle:.6f} {delta_x:.6f} {delta_y:.6f} {delta_f:.6f} {grad_curr}"
+        )
+
+    output_text = "\n".join(output_lines)
+    print(output_text)
+
     if plot:
         make_plot(np.array(trajectory), f, 'DFP Method')
     if table:
