@@ -11,29 +11,29 @@ from typing import Callable, List, Tuple, Dict, Optional
 import logging
 import traceback
 
-# Настройка логирования
+# Настройка логирования с временной меткой и уровнем INFO
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Класс для отслеживания количества вызовов функций оптимизации
 class OptimizationTracker:
-    """Класс для отслеживания количества вызовов функций"""
     def __init__(self):
         self.reset()
     
-    def reset(self) -> None:
-        """Сброс счетчиков"""
-        self.f_count = 0
-        self.grad_count = 0
-        self.hessian_count = 0
+    def reset(self):
+        """Сброс всех счетчиков"""
+        self.f_count = 0      # Кол-во вызовов целевой функции
+        self.grad_count = 0   # Кол-во вызовов градиента
+        self.hessian_count = 0  # Кол-во вызовов гессиана
 
+# Параллельное вычисление градиентов с использованием потоков
 class ParallelGradient:
-    """Класс для параллельного вычисления градиента"""
     def __init__(self, f: Callable, tracker: OptimizationTracker, h: float = 1e-6):
         self.f = f
         self.tracker = tracker
-        self.h = h
+        self.h = h  # Шаг для конечных разностей
     
     def _calc_partial(self, x: np.ndarray, i: int) -> float:
-        """Вычисление частной производной по одной координате"""
+        """Вычисление частной производной по i-му направлению"""
         x_plus = x.copy()
         x_plus[i] += self.h
         x_minus = x.copy()
@@ -42,50 +42,74 @@ class ParallelGradient:
         return result
     
     def compute(self, x: np.ndarray) -> np.ndarray:
-        """Параллельное вычисление всех частных производных"""
+        """Параллельное вычисление градиента"""
         with ThreadPoolExecutor() as executor:
-            results = list(executor.map(
-                lambda i: self._calc_partial(x, i), 
-                range(len(x))
-            ))
-        self.tracker.grad_count += 2 * len(x)
+            results = list(executor.map(lambda i: self._calc_partial(x, i), range(len(x))))
+        self.tracker.grad_count += 2 * len(x)  # Два вызова функции на компоненту
         return np.array(results)
 
+# Обертка для подсчета вызовов целевой функции
 def make_function_with_counter(f: Callable, tracker: OptimizationTracker) -> Callable:
-    """Декоратор для подсчета количества вызовов функции"""
     def wrapped(x: np.ndarray) -> float:
         tracker.f_count += 1
         return f(x)
     return wrapped
 
-# Тестовые функции
+# Определение тестовых функций и их производных
 def _f_quadratic(x: np.ndarray) -> float:
-    """Квадратичная функция"""
+    """Квадратичная функция: 100*(x1-x2)^2 + (1-x1)^2"""
     return 100 * (x[1] - x[0])**2 + (1 - x[0])**2
 
+def grad_quadratic(x: np.ndarray) -> np.ndarray:
+    """Аналитический градиент квадратичной функции"""
+    return np.array([
+        -200 * (x[1] - x[0]) - 2 * (1 - x[0]),  # ∂f/∂x1
+        200 * (x[1] - x[0])                     # ∂f/∂x2
+    ])
+
+def hessian_quadratic(x: np.ndarray) -> np.ndarray:
+    """Аналитический гессиан квадратичной функции"""
+    return np.array([
+        [202, -200],
+        [-200, 200]
+    ], dtype=np.float64)
+
 def _f_rosenbrock(x: np.ndarray) -> float:
-    """Функция Розенброка"""
+    """Функция Розенброка: 100*(x2-x1^2)^2 + (1-x1)^2"""
     return 100 * (x[1] - x[0]**2)**2 + (1 - x[0])**2
 
+def grad_rosenbrock(x: np.ndarray) -> np.ndarray:
+    """Аналитический градиент функции Розенброка"""
+    return np.array([-400 * x[0] * (x[1] - x[0]**2) - 2 * (1 - x[0]), 
+                    200 * (x[1] - x[0]**2)])
+
+def hessian_rosenbrock(x: np.ndarray) -> np.ndarray:
+    """Аналитический гессиан функции Розенброка"""
+    return np.array([
+        [1200 * x[0]**2 - 400 * x[1] + 2, -400 * x[0]],
+        [-400 * x[0], 200]
+    ], dtype=np.float64)
+
 def _f_multi_exponential(x: np.ndarray, params: List[float]) -> float:
-    """Многоэкспоненциальная функция"""
+    """Многокомпонентная экспоненциальная функция с 2 пиками"""
     A1, a1, b1, c1, d1, A2, a2, b2, c2, d2 = params
     term1 = A1 * np.exp(-((x[0]-a1)/b1)**2 - ((x[1]-c1)/d1)**2)
     term2 = A2 * np.exp(-((x[0]-a2)/b2)**2 - ((x[1]-c2)/d2)**2)
     return term1 + term2
 
+# Численное вычисление градиентов и гессианов
 def grad(f: Callable, x: np.ndarray, tracker: OptimizationTracker, h: float = 1e-6) -> np.ndarray:
-    """Вычисление градиента функции"""
+    """Численное вычисление градиента с параллелизацией"""
     pg = ParallelGradient(f, tracker, h)
     return pg.compute(x)
 
-def hessian(f: Callable, x: np.ndarray, tracker: OptimizationTracker, h: float = 1e-6) -> np.ndarray:
-    """Вычисление гессиана функции"""
+def hessian(x: np.ndarray, f: Callable, tracker: OptimizationTracker, h: float = 1e-6) -> np.ndarray:
+    """Численное вычисление гессиана с использованием конечных разностей"""
     n = len(x)
-    hess = np.zeros((n, n))
-    
-    # Создаем все точки для вычисления вторых производных
+    hess = np.zeros((n, n), dtype=float)
     points = []
+    
+    # Генерация точек для вычисления вторых производных
     for i in range(n):
         for j in range(n):
             x_pp = x.copy()
@@ -98,14 +122,13 @@ def hessian(f: Callable, x: np.ndarray, tracker: OptimizationTracker, h: float =
             x_mm[i] -= h; x_mm[j] -= h
             points.extend([x_pp, x_pm, x_mp, x_mm])
     
-    # Вычисляем все значения функции
+    # Параллельное вычисление значений функции
     with ThreadPoolExecutor() as executor:
         results = list(executor.map(lambda p: f(p), points))
     
-    # Обновляем счетчик вызовов функции
+    # Подсчет количества вызовов (4 вызова на каждый элемент матрицы)
     tracker.hessian_count += 4 * n * n
     
-    # Вычисляем элементы гессиана
     idx = 0
     for i in range(n):
         for j in range(n):
@@ -115,16 +138,17 @@ def hessian(f: Callable, x: np.ndarray, tracker: OptimizationTracker, h: float =
             f_mm = results[idx+3]
             hess[i, j] = (f_pp - f_pm - f_mp + f_mm) / (4 * h**2)
             idx += 4
-    
     return hess
 
-# Визуализация
-def make_plot(x_store: List[np.ndarray], f: Callable, algorithm: str, params: Optional[List[float]] = None) -> None:
-    """Создание контурного графика траектории оптимизации"""
+# Визуализация траектории оптимизации
+def make_plot(x_store: List[np.ndarray], f: Callable, algorithm: str, 
+              params: Optional[List[float]] = None) -> None:
+    """Построение контурного графика с траекторией оптимизации"""
     x_store = np.array(x_store)
     padding = 0.5
     x1_min, x1_max = x_store[:, 0].min()-padding, x_store[:, 0].max()+padding
     x2_min, x2_max = x_store[:, 1].min()-padding, x_store[:, 1].max()+padding
+    
     x1 = np.linspace(x1_min, x1_max, 100)
     x2 = np.linspace(x2_min, x2_max, 100)
     X1, X2 = np.meshgrid(x1, x2)
@@ -135,7 +159,9 @@ def make_plot(x_store: List[np.ndarray], f: Callable, algorithm: str, params: Op
         Z = f([X1, X2])
     
     plt.figure(figsize=(10, 8))
-    plt.title(f"{algorithm}\nFinal Point: {x_store[-1].round(4)}\nIterations: {len(x_store)}")
+    plt.title(f"{algorithm}\n"
+              f"Final Point: {x_store[-1].round(4)}\n"
+              f"Iterations: {len(x_store)}")
     contour = plt.contourf(X1, X2, Z, levels=50, cmap='viridis')
     plt.colorbar(contour)
     plt.scatter(x_store[:, 0], x_store[:, 1], c='red', s=50, edgecolors='white')
@@ -144,10 +170,11 @@ def make_plot(x_store: List[np.ndarray], f: Callable, algorithm: str, params: Op
     plt.ylabel('x2')
     plt.show()
 
-# Таблица результатов
-def make_table(x_store: List[np.ndarray], f_store: List[float], nabla_store: List[np.ndarray], 
-              a_store: List[float], s_store: List[np.ndarray], H_store: Optional[List[np.ndarray]] = None) -> pd.DataFrame:
-    """Создание таблицы с результатами оптимизации"""
+# Создание таблицы результатов оптимизации
+def make_table(x_store: List[np.ndarray], f_store: List[float], 
+               nabla_store: List[np.ndarray], a_store: List[float], 
+               s_store: List[np.ndarray], H_store: Optional[List[np.ndarray]] = None) -> pd.DataFrame:
+    """Создание таблицы с итерациями оптимизации"""
     data = []
     for i in range(len(x_store)):
         row = {
@@ -156,7 +183,7 @@ def make_table(x_store: List[np.ndarray], f_store: List[float], nabla_store: Lis
             'y': np.round(x_store[i][1], 6),
             'f(x,y)': np.round(f_store[i], 6),
             '∇f_x': np.round(nabla_store[i][0], 4),
-            '∇f_y': np.round(nabla_store[i][1], 4),
+            '∇f_Y': np.round(nabla_store[i][1], 4),
             'Step_x': np.round(s_store[i][0], 6) if i < len(s_store) else '-',
             'Step_y': np.round(s_store[i][1], 6) if i < len(s_store) else '-',
             'α': np.round(a_store[i], 6) if i < len(a_store) else '-'
@@ -168,13 +195,13 @@ def make_table(x_store: List[np.ndarray], f_store: List[float], nabla_store: Lis
         data.append(row)
     return pd.DataFrame(data).set_index('Iteration')
 
-# Линейный поиск с коррекцией для максимизации
+# Линейный поиск с условиями Армихо и кривизны
 def line_search(f: Callable, x: np.ndarray, p: np.ndarray, nabla: np.ndarray, 
-                tracker: OptimizationTracker, find_max: bool = False, 
-                c1: float = 1e-4, c2: float = 0.9, max_iter: int = 100) -> float:
-    """Алгоритм линейного поиска с условиями Армихо и кривизны"""
+                tracker: OptimizationTracker, find_max: bool = False, c1: float = 1e-4, 
+                c2: float = 0.9, max_iter: int = 100) -> float:
+    """Определение оптимального шага alpha для направления p"""
     alpha = 1.0
-    min_alpha = 1e-10  # Минимально допустимый шаг
+    min_alpha = 1e-10
     fx = f(x)
     
     for _ in range(max_iter):
@@ -182,6 +209,7 @@ def line_search(f: Callable, x: np.ndarray, p: np.ndarray, nabla: np.ndarray,
         fx_new = f(x_new)
         grad_new = grad(f, x_new, tracker)
         
+        # Условия Армихо и кривизны
         if find_max:
             armijo = fx_new >= fx + c1 * alpha * np.dot(nabla, p)
             curvature = np.dot(grad_new, p) >= c2 * np.dot(nabla, p)
@@ -191,68 +219,92 @@ def line_search(f: Callable, x: np.ndarray, p: np.ndarray, nabla: np.ndarray,
         
         if armijo and curvature or alpha < min_alpha:
             return alpha
-        
         alpha *= 0.5
-    
     return alpha
 
-# Метод Ньютона с регуляризацией
+# Метод Ньютона с гессианом
 def newton_method(f: Callable, x0: np.ndarray, eps: float, tracker: OptimizationTracker, 
-                  plot: bool = True, table: bool = True, find_max: bool = False, 
-                  max_iter: int = 5000) -> Optional[pd.DataFrame]:
-    """Метод Ньютона с регуляризацией для минимизации/максимизации функции"""
-    tracker.reset()
-    x = np.array(x0, dtype=float)
-    trajectory = [x.copy()]
-    f_values = [f(x)]
-    gradients = [grad(f, x, tracker)]
-    alphas = []
-    steps = []
-    hessians = []
+                  grad_f: Callable = None, hess_f: Callable = None, plot: bool = True, 
+                  table: bool = True, find_max: bool = False, max_iter: int = 5000) -> Optional[pd.DataFrame]:
+    """Метод Ньютона для минимизации/максимизации функции.
+    
+    Использует аналитический или численный гессиан для определения направления спуска.
+    Поддерживает как минимизацию, так и максимизацию через флаг `find_max`.
+    """
+    tracker.reset()  # Сброс счётчиков вызовов функций
+    x = np.array(x0, dtype=float)  # Текущая точка
+    trajectory = [x.copy()]  # История точек (траектория)
+    f_values = [f(x)]  # Значения целевой функции
+    
+    # Выбор функции для вычисления градиента и гессиана
+    # Приоритет аналитическим производным, если они доступны
+    grad_func = grad_f if grad_f else ParallelGradient(f, tracker).compute
+    hess_func = hess_f if hess_f else partial(hessian, f=f, tracker=tracker)
+    
+    gradients = [grad_func(x)]  # Градиенты на каждой итерации
+    alphas = []  # Шаги линейного поиска
+    steps = []  # Векторы шагов
+    hessians = []  # Хранение матриц гессиана
     
     for _ in range(max_iter):
-        grad_current = gradients[-1]
-        hess = hessian(f, x, tracker)
-        hessians.append(hess.copy())
+        grad_current = gradients[-1]  # Текущий градиент
         
         try:
-            # Добавляем регуляризацию для плохо обусловленного гессиана
+            hess = hess_func(x)  # Вычисление гессиана
+            hessians.append(hess.copy())
+            
+            # Проверка положительной определённости гессиана
+            # Для корректности метода Ньютона матрица должна быть положительно определена
             eigenvalues = np.linalg.eigvalsh(hess)
             min_eigen = np.min(eigenvalues)
-            if min_eigen < 1e-8:
-                hess += (1e-8 - min_eigen) * np.eye(len(x))
+            if min_eigen < 1e-10:  # Если есть близкие к нулю собственные значения
+                hess = (hess + hess.T) / 2  # Симметризация матрицы
+                # hess += (1e-10 - min_eigen) * np.eye(len(x), dtype=float)  # Альтернативное регуляризирование
             
+            # Определение направления поиска
+            # Решаем систему H * p = -grad (для минимизации)
             p = np.linalg.solve(hess, -grad_current)
-            if find_max:
+            if find_max:  # Для максимизации инвертируем направление
                 p = -p
             
-            # Проверка направления для максимизации
+            # Проверка направления: должно быть согласовано с градиентом
             direction_ok = np.dot(p, grad_current) > 1e-8 if find_max else np.dot(p, grad_current) < -1e-8
             if not direction_ok:
+                # Если направление не обеспечивает убывания/роста, используем градиентный спуск/подъём
                 p = grad_current if find_max else -grad_current
-        
+                
         except np.linalg.LinAlgError:
-            # Используем градиентный спуск как последнее средство
+            # В случае ошибки решения системы (например, вырожденный гессиан)
+            # Используем градиентный спуск/подъём
             p = grad_current if find_max else -grad_current
+            
+        # Линейный поиск для определения оптимального шага alpha
+        alpha = line_search(
+            f, x, p, grad_current, tracker, 
+            find_max=find_max,
+            c1=1e-5 if "Rosenbrock" in f.__name__ else 1e-4,  # Адаптация параметров для Rosenbrock
+            c2=0.1 if "Rosenbrock" in f.__name__ else 0.9
+        )
         
-        alpha = line_search(f, x, p, grad_current, tracker, find_max)
-        s = alpha * p
-        x_new = x + s
+        # Обновление параметров
+        s = alpha * p  # Вектор шага
+        x_new = x + s  # Новая точка
         trajectory.append(x_new.copy())
         f_values.append(f(x_new))
-        gradients.append(grad(f, x_new, tracker))
+        gradients.append(grad_func(x_new))
         alphas.append(alpha)
         steps.append(s)
         
-        grad_norm = np.linalg.norm(gradients[-1])
-        step_norm = np.linalg.norm(s)
-        
-        if grad_norm < eps or step_norm < 1e-8:
+        # Условия остановки
+        grad_norm = np.linalg.norm(gradients[-1])  # Норма градиента
+        step_norm = np.linalg.norm(s)  # Норма шага
+        f_change = abs(f_values[-2] - f_values[-1])  # Изменение значения функции
+        if grad_norm < eps or step_norm < 1e-10 or f_change < 1e-14:
             break
-        
-        x = x_new
+            
+        x = x_new  # Обновление текущей точки
     
-    # Формирование вывода
+    # Логирование результатов
     output_lines = [
         "Newton Method",
         f"Number of iterations objective function: {tracker.f_count}",
@@ -285,58 +337,88 @@ def newton_method(f: Callable, x0: np.ndarray, eps: float, tracker: Optimization
     if plot:
         title = 'Newton Method (Maximization)' if find_max else 'Newton Method'
         make_plot(np.array(trajectory), f, title)
-    
+        
     if table:
         return make_table(trajectory, f_values, gradients, alphas, steps, hessians)
     
     return trajectory[-1]
 
-# Метод DFP с коррекцией для максимизации
+# Метод DFP (Davidon-Fletcher-Powell)
 def dfp_method(f: Callable, x0: np.ndarray, eps: float, tracker: OptimizationTracker, 
-               plot: bool = True, table: bool = True, find_max: bool = False, 
-               max_iter: int = 500) -> Optional[pd.DataFrame]:
-    """Метод Дэвидона-Флетчера-Пауэлла для минимизации/максимизации функции"""
-    tracker.reset()
-    x = np.array(x0, dtype=float)
-    n = len(x)
-    H = np.eye(n)
-    grad_current = grad(f, x, tracker)
-    trajectory = [x.copy()]
-    f_values = [f(x)]
-    gradients = [grad_current.copy()]
-    alphas = []
-    steps = []
-    hessians = [H.copy()]
+               grad_f: Callable = None, plot: bool = True, table: bool = True, 
+               find_max: bool = False, max_iter: int = 500) -> Optional[pd.DataFrame]:
+    """Метод DFP для минимизации/максимизации функции (Davidon-Fletcher-Powell).
     
-    for _ in range(max_iter):
+    Метод использует квазиньютоновское обновление матрицы H для аппроксимации обратного гессиана.
+    Поддерживает как минимизацию, так и максимизацию через флаг `find_max`.
+    """
+    tracker.reset()
+    x = np.array(x0, dtype=float)  # Текущая точка
+    n = len(x)  # Размерность задачи
+    H = np.eye(n)  # Инициализация матрицы H как единичной (начальное приближение обратного гессиана)
+    
+    # Выбор функции для вычисления градиента
+    grad_func = grad_f if grad_f else ParallelGradient(f, tracker).compute
+    grad_current = grad_func(x)  # Начальный градиент
+    trajectory = [x.copy()]  # Траектория итераций
+    f_values = [f(x)]  # Значения целевой функции
+    gradients = [grad_current.copy()]  # Градиенты на каждой итерации
+    alphas = []  # Шаги линейного поиска
+    steps = []  # Векторы шагов
+    hessians = [H.copy()]  # Хранение матриц H
+    
+    for iteration in range(max_iter):
+        # Сброс матрицы H каждые 5 итераций для предотвращения накопления ошибок
+        if iteration % 5 == 0:
+            H = np.eye(n)
+        
+        # Определение направления поиска
         if find_max:
-            p = H @ grad_current
+            p = H @ grad_current  # Направление для максимизации
+            # Если направление не обеспечивает роста, переходим к градиентному подъему
             if np.dot(p, grad_current) <= 0:
                 p = grad_current
                 H = np.eye(n)
         else:
-            p = -H @ grad_current
+            p = -H @ grad_current  # Направление для минимизации
+            # Если направление не обеспечивает убывания, переходим к градиентному спуску
             if np.dot(p, grad_current) >= 0:
                 p = -grad_current
                 H = np.eye(n)
         
-        alpha = line_search(f, x, p, grad_current, tracker, find_max=find_max, c1=1e-4, c2=0.1)
-        s = alpha * p
-        x_new = x + s
-        grad_new = grad(f, x_new, tracker)
-        y = grad_new - grad_current
-        s_norm = np.linalg.norm(s)
-        y_norm = np.linalg.norm(y)
+        # Линейный поиск для определения оптимального шага alpha
+        alpha = line_search(
+            f, x, p, grad_current, tracker, 
+            find_max=find_max,
+            c1=1e-5 if "Rosenbrock" in f.__name__ else 1e-4,  # Адаптация параметров для Rosenbrock
+            c2=0.1 if "Rosenbrock" in f.__name__ else 0.9
+        )
         
-        if s_norm > 1e-8 and y_norm > 1e-8:
-            s = s.reshape(-1, 1)
-            y = y.reshape(-1, 1)
-            rho = 1.0 / (y.T @ s + 1e-10)
+        # Обновление параметров
+        s = alpha * p  # Вектор шага
+        x_new = x + s  # Новая точка
+        grad_new = grad_func(x_new)  # Градиент в новой точке
+        y = grad_new - grad_current  # Разница градиентов
+        
+        # Формула обновления матрицы H (DFP-формула)
+        s_vec = s.reshape(-1, 1)  # Преобразование вектора шага в столбец
+        y_vec = y.reshape(-1, 1)  # Преобразование вектора y в столбец
+        sy = float(s_vec.T @ y_vec)  # Скалярное произведение s и y
+        
+        if sy > 1e-10:  # Избегаем деления на ноль
+            # DFP-обновление матрицы H:
+            # H = H + (s*s^T)/s^Ty - (H*y*y^T*H)/(y^T*H*y)
+            H_update = (
+                (s_vec @ s_vec.T) / sy 
+                - (H @ y_vec @ y_vec.T @ H) / (y_vec.T @ H @ y_vec + 1e-10)  # Добавляем эпсилон для стабильности
+            )
+            H = H + H_update
+        
+        # Проверка положительной определенности матрицы H
+        if np.any(np.linalg.eigvalsh(H) < 0):  # Если есть отрицательные собственные значения
+            H = np.eye(n)  # Сброс матрицы H
             
-            if abs(rho) < 1e10:
-                Hy = H @ y
-                H = H - (Hy @ Hy.T) / (y.T @ Hy + 1e-10) + rho * (s @ s.T)
-        
+        # Обновление истории
         trajectory.append(x_new.copy())
         f_values.append(f(x_new))
         gradients.append(grad_new.copy())
@@ -344,17 +426,17 @@ def dfp_method(f: Callable, x0: np.ndarray, eps: float, tracker: OptimizationTra
         steps.append(s.flatten())
         hessians.append(H.copy())
         
-        grad_norm = np.linalg.norm(grad_new)
-        step_norm = np.linalg.norm(s)
-        f_change = abs(f_values[-2] - f_values[-1])
-        
-        if grad_norm < eps or step_norm < 1e-8 or f_change < 1e-12:
+        # Условия остановки
+        grad_norm = np.linalg.norm(grad_new)  # Норма градиента
+        step_norm = np.linalg.norm(s)  # Норма шага
+        f_change = abs(f_values[-2] - f_values[-1])  # Изменение значения функции
+        if grad_norm < eps or step_norm < 1e-8 or f_change < 1e-14:
             break
-        
-        x = x_new
-        grad_current = grad_new
+            
+        x = x_new  # Обновление текущей точки
+        grad_current = grad_new  # Обновление текущего градиента
     
-    # Формирование вывода
+    # Логирование результатов
     output_lines = [
         "DFP Method",
         f"Number of iterations objective function: {tracker.f_count}",
@@ -386,33 +468,31 @@ def dfp_method(f: Callable, x0: np.ndarray, eps: float, tracker: OptimizationTra
     
     if plot:
         make_plot(np.array(trajectory), f, 'DFP Method')
-    
+        
     if table:
         return make_table(trajectory, f_values, gradients, alphas, steps, hessians)
     
     return trajectory[-1]
 
-# GUI приложение
+# Графический интерфейс приложения
 class OptimizationApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Optimization Methods Comparison")
         self.tracker = OptimizationTracker()
-        self.params = [3, 1, 2, 1, 1, 2, 3, 1, 2, 1]
+        self.params = [3, 1, 2, 1, 1, 2, 3, 1, 2, 1]  # Параметры для многокомпонентной функции
         self.functions = [
-            ("Quadratic Function", partial(_f_quadratic), False),
-            ("Rosenbrock Function", partial(_f_rosenbrock), False),
-            ("Multi-Exponential Function", 
-             partial(_f_multi_exponential, params=self.params), True)
+            ("Quadratic Function", _f_quadratic, grad_quadratic, hessian_quadratic, False),
+            ("Rosenbrock Function", _f_rosenbrock, grad_rosenbrock, hessian_rosenbrock, False),
+            ("Multi-Exponential Function", partial(_f_multi_exponential, params=self.params), None, None, True)
         ]
         self.create_widgets()
     
     def create_widgets(self) -> None:
-        """Создание виджетов интерфейса"""
+        """Создание элементов управления"""
         control_frame = ttk.LabelFrame(self.root, text="Parameters")
         control_frame.pack(padx=10, pady=10, fill=tk.X)
         
-        # Function selection
         ttk.Label(control_frame, text="Function:").grid(row=0, column=0, padx=5, pady=5)
         self.func_var = tk.StringVar()
         self.func_combobox = ttk.Combobox(control_frame, textvariable=self.func_var,
@@ -420,7 +500,6 @@ class OptimizationApp:
         self.func_combobox.grid(row=0, column=1, padx=5, pady=5)
         self.func_combobox.current(0)
         
-        # Initial point selection
         ttk.Label(control_frame, text="Initial Point:").grid(row=1, column=0, padx=5, pady=5)
         self.point_var = tk.StringVar()
         self.point_combobox = ttk.Combobox(control_frame, textvariable=self.point_var,
@@ -428,7 +507,6 @@ class OptimizationApp:
         self.point_combobox.grid(row=1, column=1, padx=5, pady=5)
         self.point_combobox.current(0)
         
-        # Custom point inputs
         self.custom_point_frame = ttk.Frame(control_frame)
         ttk.Label(self.custom_point_frame, text="x:").pack(side=tk.LEFT)
         self.x_entry = ttk.Entry(self.custom_point_frame, width=5)
@@ -437,7 +515,6 @@ class OptimizationApp:
         self.y_entry = ttk.Entry(self.custom_point_frame, width=5)
         self.y_entry.pack(side=tk.LEFT)
         
-        # Tolerance selection
         ttk.Label(control_frame, text="Tolerance:").grid(row=2, column=0, padx=5, pady=5)
         self.eps_var = tk.StringVar()
         self.eps_combobox = ttk.Combobox(control_frame, textvariable=self.eps_var,
@@ -445,7 +522,6 @@ class OptimizationApp:
         self.eps_combobox.grid(row=2, column=1, padx=5, pady=5)
         self.eps_combobox.current(0)
         
-        # Run buttons
         self.run_frame = ttk.Frame(control_frame)
         self.run_frame.grid(row=3, column=0, columnspan=2, pady=10)
         ttk.Button(self.run_frame, text="Run Newton Method",
@@ -453,37 +529,40 @@ class OptimizationApp:
         ttk.Button(self.run_frame, text="Run DFP Method",
                  command=lambda: self.run_optimization('dfp')).pack(side=tk.LEFT, padx=5)
         
-        # Results area
         self.result_frame = ttk.LabelFrame(self.root, text="Results")
         self.result_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
         
-        # Text output
         self.output_text = tk.Text(self.result_frame, height=15)
         self.output_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
         self.output_scroll = ttk.Scrollbar(self.result_frame, command=self.output_text.yview)
         self.output_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.output_text.config(yscrollcommand=self.output_scroll.set)
         
-        # Plot canvas
         self.figure = plt.Figure(figsize=(6, 4), dpi=100)
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         
-        # Bindings
         self.point_combobox.bind("<<ComboboxSelected>>", self.toggle_custom_point)
         self.toggle_custom_point()
     
     def toggle_custom_point(self, event: Optional[tk.Event] = None) -> None:
-        """Переключение между стандартными и пользовательскими начальными точками"""
+        """Показ/скрытие поля ввода пользовательской начальной точки"""
         if self.point_combobox.get() == "Custom":
             self.custom_point_frame.grid(row=1, column=2, padx=5, pady=5)
         else:
             self.custom_point_frame.grid_remove()
     
     def get_parameters(self) -> Tuple[str, Callable, bool, List[float], float]:
-        """Получение параметров оптимизации из интерфейса"""
+        """Получение параметров из GUI"""
         func_idx = self.func_combobox.current()
-        f_name, f, find_max = self.functions[func_idx]
+        f_name, f, grad_f, hess_f, find_max = self.functions[func_idx]
+        
+        if grad_f is None:
+            grad_f = ParallelGradient(f, self.tracker).compute
+        if hess_f is None:
+            hess_f = partial(hessian, f=f, tracker=self.tracker)
+            
         f = make_function_with_counter(f, self.tracker)
         
         if self.point_combobox.get() == "Custom":
@@ -491,24 +570,24 @@ class OptimizationApp:
                 x = float(self.x_entry.get())
                 y = float(self.y_entry.get())
                 if not (-1e6 <= x <= 1e6 and -1e6 <= y <= 1e6):
-                    raise ValueError("Координаты вне допустимого диапазона")
+                    raise ValueError("Coordinates out of range")
                 x0 = [x, y]
             except ValueError:
-                raise ValueError("Некорректный ввод координат начальной точки")
+                raise ValueError("Invalid initial point coordinates")
         else:
-            x0 = eval(self.point_combobox.get())
+            x0 = eval(self.point_combobox.get())  # Использование eval для строк вроде "[-1.2, 1]"
         
         if self.eps_combobox.get() == "Custom":
             try:
                 eps = float(self.eps_var.get())
                 if not (1e-10 <= eps <= 1e-1):
-                    raise ValueError("Точность вне допустимого диапазона")
+                    raise ValueError("Invalid tolerance value")
             except ValueError:
-                raise ValueError("Некорректный ввод точности")
+                raise ValueError("Invalid tolerance input")
         else:
             eps = float(self.eps_combobox.get().replace("1e-", "1e-"))
         
-        return f_name, f, find_max, x0, eps
+        return f_name, f, grad_f, hess_f, find_max, x0, eps
     
     def run_optimization(self, method: str) -> None:
         """Запуск оптимизации в отдельном потоке"""
@@ -516,25 +595,26 @@ class OptimizationApp:
         self.figure.clear()
         
         try:
-            f_name, f, find_max, x0, eps = self.get_parameters()
+            f_name, f, grad_f, hess_f, find_max, x0, eps = self.get_parameters()
         except Exception as e:
             self.output_text.insert(tk.END, f"Input Error: {str(e)}")
             return
-        
+            
         self.output_text.insert(tk.END, f"Running {method} method...\n")
         self.root.update()
         
         def optimization_thread():
             try:
                 if method == 'newton':
-                    result = newton_method(f, x0, eps, self.tracker, plot=False, table=True, find_max=find_max)
+                    result = newton_method(f, x0, eps, self.tracker, grad_f, hess_f, 
+                                         plot=False, table=True, find_max=find_max)
                 else:
-                    result = dfp_method(f, x0, eps, self.tracker, plot=False, table=True, find_max=find_max)
+                    result = dfp_method(f, x0, eps, self.tracker, grad_f,
+                                      plot=False, table=True, find_max=find_max)
                 
-                # Update plot
                 self.figure.clear()
                 ax = self.figure.add_subplot(111)
-                x_store = np.array([[row[1]['x'], row[1]['y']] for row in result.iterrows()]) 
+                x_store = np.array([[row[1]['x'], row[1]['y']] for row in result.iterrows()])
                 
                 if "Multi-Exponential" in f_name:
                     plot_function = partial(_f_multi_exponential, params=self.params)
@@ -545,12 +625,14 @@ class OptimizationApp:
                     np.linspace(x_store[:,0].min()-0.5, x_store[:,0].max()+0.5, 100),
                     np.linspace(x_store[:,1].min()-0.5, x_store[:,1].max()+0.5, 100))
                 Z = plot_function([X1, X2])
+                
                 ax.contourf(X1, X2, Z, levels=50, cmap='viridis')
                 ax.plot(x_store[:,0], x_store[:,1], 'w-', lw=1)
-                ax.set_title(f"{method} Method\nFinal Point: {x_store[-1].round(4)}\nIterations: {len(x_store)}")
+                ax.set_title(f"{method} Method\n"
+                             f"Final Point: {x_store[-1].round(4)}\n"
+                             f"Iterations: {len(x_store)}")
                 self.canvas.draw()
                 
-                # Update text output
                 self.output_text.insert(tk.END, f"\nResults for {f_name}:\n")
                 self.output_text.insert(tk.END, f"Iterations: {len(result)}\n")
                 self.output_text.insert(tk.END, f"Function calls: {self.tracker.f_count}\n")
@@ -558,12 +640,10 @@ class OptimizationApp:
                 self.output_text.insert(tk.END, f"Hessian calls: {self.tracker.hessian_count}\n")
                 self.output_text.insert(tk.END, f"Final point: {x_store[-1].round(6)}\n")
                 self.output_text.insert(tk.END, f"Final value: {result.iloc[-1]['f(x,y)'].round(6)}\n")
-                
             except Exception as e:
                 error_msg = f"Error: {str(e)}\n{traceback.format_exc()}"
                 self.output_text.insert(tk.END, error_msg)
                 logging.error(error_msg)
-            
             finally:
                 self.tracker.reset()
         
