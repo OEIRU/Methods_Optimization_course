@@ -92,7 +92,7 @@ def hessian_rosenbrock(x: np.ndarray) -> np.ndarray:
 
 def _f_multi_exponential(x: np.ndarray, params: List[float]) -> float:
     """Многокомпонентная экспоненциальная функция с 2 пиками"""
-    A1, a1, b1, c1, d1, A2, a2, b2, c2, d2 = params
+    A1, A2, a1, a2, b1, b2, c1, c2, d1, d2 = params
     term1 = A1 * np.exp(-((x[0]-a1)/b1)**2 - ((x[1]-c1)/d1)**2)
     term2 = A2 * np.exp(-((x[0]-a2)/b2)**2 - ((x[1]-c2)/d2)**2)
     return term1 + term2
@@ -652,4 +652,4 @@ class OptimizationApp:
 if __name__ == "__main__":
     root = tk.Tk()
     app = OptimizationApp(root)
-    root.mainloop()
+    root.mainloop() 
